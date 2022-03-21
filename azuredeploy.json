@@ -1,0 +1,244 @@
+{
+	"$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+	"contentVersion": "1.0.0.0",
+	"metadata": {
+		"comments": "This Logic App connector will act as a Webhook listener, CanaryTokens can then send data upon an incident when the canary token has been opened. This will send the data to Azure Sentinel - CanaryTokens_CL",
+		"author": "Nathan Swift"
+	},
+	"parameters": {
+		"PlaybookName": {
+			"defaultValue": "Ingest-SecurityHive",
+			"type": "String"
+		},
+		"WorkspaceID": {
+			"defaultValue": "your-workspaceID",
+			"type": "string"
+		},
+		"WorkspaceKey": {
+			"defaultValue": "your-workspaceKey",
+			"type": "securestring"
+		}
+	},
+	"variables": {
+		"azureloganalyticsdatacollectorConnectionName": "[concat('azureloganalyticsdatacollector-', parameters('PlaybookName'))]"
+	},
+	"resources": [{
+			"type": "Microsoft.Web/connections",
+			"apiVersion": "2016-06-01",
+			"name": "[variables('azureloganalyticsdatacollectorConnectionName')]",
+			"location": "[resourceGroup().location]",
+			"properties": {
+				"displayName": "IngestSecurityHiveDetections",
+				"customParameterValues": {},
+				"api": {
+					"id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azureloganalyticsdatacollector')]"
+				},
+				"parameterValues": {
+					"username": "[parameters('workspaceId')]",
+					"password": "[parameters('workspaceKey')]"
+				}
+			}
+		},
+		{
+			"type": "Microsoft.Logic/workflows",
+			"apiVersion": "2017-07-01",
+			"name": "[parameters('PlaybookName')]",
+			"location": "[resourceGroup().location]",
+			"tags": {
+				"LogicAppsCategory": "security"
+			},
+			"dependsOn": [
+				"[resourceId('Microsoft.Web/connections', variables('azureloganalyticsdatacollectorConnectionName'))]"
+			],
+			"properties": {
+				"state": "Enabled",
+				"definition": {
+					"$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+					"contentVersion": "1.0.0.0",
+					"parameters": {
+						"$connections": {
+							"defaultValue": {},
+							"type": "Object"
+						}
+					},
+					"triggers": {
+						"manual": {
+							"type": "Request",
+							"kind": "Http",
+							"inputs": {}
+						}
+					},
+					"Compose_data_for_Sentinel": {
+						"inputs": "{\n\"timestamp\": @{body('Parse_JSON_Response')?['session_start']?['timestamp']},\n\"protocol\": @{body('Parse_JSON_Response')?['session_start']?['protocol']},\n\"honeypot\": @{body('Parse_JSON_Response')?['session_start']?['honeypot']},\n\"id\": @{body('Parse_JSON_Response')?['session_start']?['start_id']},\n\"src_ip\": @{body('Parse_JSON_Response')?['session_start']?['src_ip']},\n\"src_port\": @{body('Parse_JSON_Response')?['session_start']?['src_port']},\n\"dst_ip\": @{body('Parse_JSON_Response')?['session_start']?['dst_ip']},\n\"dst_port\": @{body('Parse_JSON_Response')?['session_start']?['dst_port']},\n\"reverse_dns\": @{body('Parse_JSON_Response')?['session_start']?['rev_dns']},\n\"src_region_name\": @{body('Parse_JSON_Response')?['session_start']?['geoip']?['region_name']},\n\"src_timezone\": @{body('Parse_JSON_Response')?['session_start']?['geoip']?['timezone']},\n\"src_latitude\": @{body('Parse_JSON_Response')?['session_start']?['geoip']?['location']?['lat']},\n\"src_longitude\": @{body('Parse_JSON_Response')?['session_start']?['geoip']?['location']?['lon']},\nsrc_country_name\": @{body('Parse_JSON_Response')?['session_start']?['geoip']?['country_name']},\n\"incident_view_url\": @{variables('incident_view_url')}\n}",
+						"runAfter": {
+							"Initialize_variable_incidentsjson_url": [
+								"Succeeded"
+							]
+						},
+						"type": "Compose"
+					},
+					"Initialize_variable_incidentsjson_url": {
+						"inputs": {
+							"variables": [{
+								"name": "incident_view_url",
+								"type": "string",
+								"value": "https://portal.securityhive.eu/detections/@{body('Parse_JSON_Response')?['session_start']?['start_id']}"
+							}]
+						},
+						"runAfter": {
+							"Parse_JSON_Response": [
+								"Succeeded"
+							]
+						},
+						"type": "InitializeVariable"
+					},
+					"Parse_JSON_Response": {
+						"inputs": {
+							"content": "@triggerBody()",
+							"schema": {
+								"properties": {
+									"general": {
+										"properties": {
+											"mark_as_seen": {
+												"type": "boolean"
+											}
+										},
+										"type": "object"
+									},
+									"session_end": {
+										"properties": {
+											"duration_extended": {
+												"type": "string"
+											}
+										},
+										"type": "object"
+									},
+									"session_start": {
+										"properties": {
+											"dst_ip": {
+												"type": "string"
+											},
+											"dst_port": {
+												"type": "integer"
+											},
+											"event": {
+												"type": "string"
+											},
+											"geoip": {
+												"properties": {
+													"city_name": {
+														"type": "string"
+													},
+													"continent_code": {
+														"type": "string"
+													},
+													"country_name": {
+														"type": "string"
+													},
+													"ip": {
+														"type": "string"
+													},
+													"location": {
+														"properties": {
+															"lat": {
+																"type": "number"
+															},
+															"lon": {
+																"type": "number"
+															}
+														},
+														"type": "object"
+													},
+													"postal_code": {
+														"type": "string"
+													},
+													"region_code": {
+														"type": "string"
+													},
+													"region_name": {
+														"type": "string"
+													},
+													"timezone": {
+														"type": "string"
+													}
+												},
+												"type": "object"
+											},
+											"honeypot": {
+												"type": "string"
+											},
+											"notes": {
+												"type": "string"
+											},
+											"protocol": {
+												"type": "string"
+											},
+											"rev_dns": {
+												"type": "string"
+											},
+											"session": {
+												"type": "string"
+											},
+											"src_ip": {
+												"type": "string"
+											},
+											"src_port": {
+												"type": "integer"
+											},
+											"start_id": {
+												"type": "string"
+											},
+											"tags": {
+												"type": "string"
+											},
+											"timestamp": {
+												"type": "string"
+											}
+										},
+										"type": "object"
+									}
+								},
+								"type": "object"
+							}
+						},
+						"runAfter": {},
+						"type": "ParseJson"
+					},
+					"Send_Data_to_Sentinel": {
+						"runAfter": {
+							"Compose_data_for_Sentinel": [
+								"Succeeded"
+							]
+						},
+						"type": "ApiConnection",
+						"inputs": {
+							"body": "@{outputs('Compose_data_for_Sentinel')}",
+							"headers": {
+								"Log-Type": "SecurityHiveDetections"
+							},
+							"host": {
+								"connection": {
+									"name": "@parameters('$connections')['azureloganalyticsdatacollector']['connectionId']"
+								}
+							},
+							"method": "post",
+							"path": "/api/logs"
+						}
+					}
+				},
+				"outputs": {}
+			},
+			"parameters": {
+				"$connections": {
+					"value": {
+						"AzureLogAnalyticsDataCollector": {
+							"connectionId": "[resourceId('Microsoft.Web/connections', variables('azureloganalyticsdatacollectorConnectionName'))]",
+							"connectionName": "[variables('azureloganalyticsdatacollectorConnectionName')]",
+							"id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azureloganalyticsdatacollector')]"
+						}
+					}
+				}
+			}
+		}
+	]
+}
